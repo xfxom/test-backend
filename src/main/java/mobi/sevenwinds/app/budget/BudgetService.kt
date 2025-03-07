@@ -42,16 +42,57 @@ object BudgetService {
         }
     }
 
+    // Статистика за год
     suspend fun getYearStats(param: BudgetYearParam): BudgetYearStatsResponse = withContext(Dispatchers.IO) {
         transaction {
+            // Фильтрация по имени автора
+            val authorFilter = param.authorName?.lowercase()?.let { name ->
+                AuthorTable.fullName.lowerCase().like("%$name%")
+            }
+
+            // Основной запрос с фильтром
             val query = BudgetTable
-                .select { BudgetTable.year eq param.year }
+                .join(AuthorTable, JoinType.LEFT, additionalConstraint = { author eq AuthorTable.id })
+                .select {
+                    (BudgetTable.year eq param.year) and (authorFilter ?: Op.TRUE)
+                }
+                .orderBy(BudgetTable.month to SortOrder.ASC, BudgetTable.amount to SortOrder.DESC)
                 .limit(param.limit, param.offset)
 
-            val total = query.count()
-            val data = BudgetEntity.wrapRows(query).map { it.toResponse() }
 
-            val sumByType = data.groupBy { it.type.name }.mapValues { it.value.sumOf { v -> v.amount } }
+            // Общее количество записей
+            val total = BudgetTable
+                .join(AuthorTable, JoinType.LEFT, additionalConstraint = { author eq AuthorTable.id })
+                .select {
+                    (BudgetTable.year eq param.year) and (authorFilter ?: Op.TRUE)
+                }
+                .count()
+
+            // Сумма по типам
+            val sumByType = BudgetTable
+                .slice(BudgetTable.type, BudgetTable.amount.sum())
+                .select { BudgetTable.year eq param.year }
+                .groupBy(BudgetTable.type)
+                .associate {
+                    it[BudgetTable.type].name to (it[BudgetTable.amount.sum()] ?: 0)
+                }.withDefault { 0 }
+
+            // Преобразование данных в DTO
+            val data = query.map { row ->
+                val author = row[AuthorTable.id]?.let {
+                    AuthorEntity.findById(it.value)
+                }
+
+                BudgetRecordResponse(
+                    year = row[BudgetTable.year],
+                    month = row[BudgetTable.month],
+                    amount = row[BudgetTable.amount],
+                    type = row[BudgetTable.type],
+                    authorId = author?.id?.value,
+                    authorFullName = author?.fullName,
+                    authorCreatedAt = author?.createdAt?.toString()
+                )
+            }
 
             return@transaction BudgetYearStatsResponse(
                 total = total,
