@@ -1,0 +1,20 @@
+FROM gradle:6.9-jdk8
+
+WORKDIR /app
+
+COPY gradlew .
+COPY gradle gradle
+COPY build.gradle.kts .
+COPY settings.gradle .
+COPY gradle.properties .
+
+RUN apt-get update && apt-get install -y dos2unix \
+    && dos2unix gradlew \
+    && chmod +x gradlew
+
+COPY src src
+
+RUN find . -name "*.sh" -exec dos2unix {} + && \
+    dos2unix gradlew
+
+CMD ["./gradlew", "test", "--no-daemon"]
